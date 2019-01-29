@@ -149,16 +149,16 @@ std::vector<std::vector<int>> FastFeatureBundling(std::vector<std::unique_ptr<Bi
   // filter is based on sampling data, so decrease its range
   const data_size_t filter_cnt = static_cast<data_size_t>(static_cast<double>(0.95 * min_data) / num_data * total_sample_cnt);
   const data_size_t max_error_cnt = static_cast<data_size_t>(total_sample_cnt * max_conflict_rate);
+  int cur_used_feature_cnt = 0;
   std::vector<size_t> feature_non_zero_cnt;
-  feature_non_zero_cnt.reserve(used_features.size());
   // put dense feature first
   for (auto fidx : used_features) {
     feature_non_zero_cnt.emplace_back(num_per_col[fidx]);
+    ++cur_used_feature_cnt;
   }
   // sort by non zero cnt
   std::vector<int> sorted_idx;
-  sorted_idx.reserve(used_features.size());
-  for (int i = 0; i < static_cast<int>(used_features.size()); ++i) {
+  for (int i = 0; i < cur_used_feature_cnt; ++i) {
     sorted_idx.emplace_back(i);
   }
   // sort by non zero cnt, bigger first
@@ -168,7 +168,6 @@ std::vector<std::vector<int>> FastFeatureBundling(std::vector<std::unique_ptr<Bi
   });
 
   std::vector<int> feature_order_by_cnt;
-  feature_order_by_cnt.reserve(sorted_idx.size());
   for (auto sidx : sorted_idx) {
     feature_order_by_cnt.push_back(used_features[sidx]);
   }
@@ -291,58 +290,6 @@ void Dataset::Construct(
     }
   }
 
-  if (!io_config.monotone_constraints.empty()) {
-    CHECK(static_cast<size_t>(num_total_features_) == io_config.monotone_constraints.size());
-    monotone_types_.resize(num_features_);
-    for (int i = 0; i < num_total_features_; ++i) {
-      int inner_fidx = InnerFeatureIndex(i);
-      if (inner_fidx >= 0) {
-        monotone_types_[inner_fidx] = io_config.monotone_constraints[i];
-      }
-    }
-    if (ArrayArgs<int8_t>::CheckAllZero(monotone_types_)) {
-      monotone_types_.clear();
-    }
-  }
-  if (!io_config.feature_contri.empty()) {
-    CHECK(static_cast<size_t>(num_total_features_) == io_config.feature_contri.size());
-    feature_penalty_.resize(num_features_);
-    for (int i = 0; i < num_total_features_; ++i) {
-      int inner_fidx = InnerFeatureIndex(i);
-      if (inner_fidx >= 0) {
-        feature_penalty_[inner_fidx] = std::max(0.0, io_config.feature_contri[i]);
-      }
-    }
-    if (ArrayArgs<double>::CheckAll(feature_penalty_, 1.0)) {
-      feature_penalty_.clear();
-    }
-  }
-  max_bin_ = io_config.max_bin;
-  min_data_in_bin_ = io_config.min_data_in_bin;
-  bin_construct_sample_cnt_ = io_config.bin_construct_sample_cnt;
-  use_missing_ = io_config.use_missing;
-  zero_as_missing_ = io_config.zero_as_missing;
-}
-
-void Dataset::ResetConfig(const char* parameters) {
-  auto param = Config::Str2Map(parameters);
-  Config io_config;
-  io_config.Set(param);
-  if (param.count("max_bin") && io_config.max_bin != max_bin_) {
-    Log::Warning("Cannot change max_bin after constructed Dataset handle.");
-  }
-  if (param.count("bin_construct_sample_cnt") && io_config.bin_construct_sample_cnt != bin_construct_sample_cnt_) {
-    Log::Warning("Cannot change bin_construct_sample_cnt after constructed Dataset handle.");
-  }
-  if (param.count("min_data_in_bin") && io_config.min_data_in_bin != min_data_in_bin_) {
-    Log::Warning("Cannot change min_data_in_bin after constructed Dataset handle.");
-  }
-  if (param.count("use_missing") && io_config.use_missing != use_missing_) {
-    Log::Warning("Cannot change use_missing after constructed Dataset handle.");
-  }
-  if (param.count("zero_as_missing") && io_config.zero_as_missing != zero_as_missing_) {
-    Log::Warning("Cannot change zero_as_missing after constructed Dataset handle.");
-  }
   if (!io_config.monotone_constraints.empty()) {
     CHECK(static_cast<size_t>(num_total_features_) == io_config.monotone_constraints.size());
     monotone_types_.resize(num_features_);
@@ -623,7 +570,7 @@ void Dataset::SaveBinaryFile(const char* bin_filename) {
     size_t size_of_header = sizeof(num_data_) + sizeof(num_features_) + sizeof(num_total_features_)
       + sizeof(int) * num_total_features_ + sizeof(label_idx_) + sizeof(num_groups_)
       + 3 * sizeof(int) * num_features_ + sizeof(uint64_t) * (num_groups_ + 1) + 2 * sizeof(int) * num_groups_ + sizeof(int8_t) * num_features_
-      + sizeof(double) * num_features_ + sizeof(int) * 3 + sizeof(bool) * 2;
+      + sizeof(double) * num_features_;
     // size of feature names
     for (int i = 0; i < num_total_features_; ++i) {
       size_of_header += feature_names_[i].size() + sizeof(int);
@@ -634,11 +581,6 @@ void Dataset::SaveBinaryFile(const char* bin_filename) {
     writer->Write(&num_features_, sizeof(num_features_));
     writer->Write(&num_total_features_, sizeof(num_total_features_));
     writer->Write(&label_idx_, sizeof(label_idx_));
-    writer->Write(&max_bin_, sizeof(max_bin_));
-    writer->Write(&bin_construct_sample_cnt_, sizeof(bin_construct_sample_cnt_));
-    writer->Write(&min_data_in_bin_, sizeof(min_data_in_bin_));
-    writer->Write(&use_missing_, sizeof(use_missing_));
-    writer->Write(&zero_as_missing_, sizeof(zero_as_missing_));
     writer->Write(used_feature_map_.data(), sizeof(int) * num_total_features_);
     writer->Write(&num_groups_, sizeof(num_groups_));
     writer->Write(real_feature_idx_.data(), sizeof(int) * num_features_);
