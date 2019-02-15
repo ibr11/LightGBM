@@ -154,7 +154,7 @@ public:
   void Bagging(int iter) override {
     bag_data_cnt_ = num_data_;
     // not subsample for first iterations
-    if (iter < static_cast<int>(1.0f / config_->learning_rate)) { return; }
+    //if (iter < static_cast<int>(1.0f / config_->learning_rate)) { return; }
 
     const data_size_t min_inner_size = 100;
     data_size_t inner_size = (num_data_ + num_threads_ - 1) / num_threads_;
