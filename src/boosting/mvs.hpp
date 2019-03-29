@@ -15,6 +15,7 @@
 #include <fstream>
 #include <chrono>
 #include <algorithm>
+#include <functional>
 #include <iostream>
 
 namespace LightGBM {
@@ -86,6 +87,36 @@ public:
     bag_data_cnt_ = num_data_;
   }
 
+  score_t CalculateThreshold(std::vector<score_t>::iterator begin,
+  	                         std::vector<score_t>::iterator end,
+  	                         score_t sum_low, size_t n_high, double sample_rate) {
+  	score_t threshold = *begin;
+  	auto middle_begin = std::partition(begin, end, [threshold](const score_t& x) {return x < threshold;});
+  	auto middle_end = std::partition(middle_begin, end, [threshold](const score_t& x) {return x <= threshold;});
+  	
+  	score_t sum_left = std::accumulate(begin, middle_begin, 0.0);
+  	size_t n_right = end - middle_end;
+  	size_t n_middle = middle_end - middle_begin;
+  	score_t sum_middle = n_middle * threshold;
+
+  	double estimated_sample_rate = (sum_low + sum_left) / threshold + n_high + n_right + n_middle;
+  	if (estimated_sample_rate > sample_rate) {
+  		if (middle_end != end) {
+  			sum_low += sum_middle + sum_left;
+  			return CalculateThreshold(middle_end, end, sum_low, n_high, sample_rate);
+  		} else {
+  			return (sum_low + sum_left + sum_middle) / (sample_rate - n_high);
+  		}
+  	} else {
+  		if (middle_begin != begin) {
+  			n_high += n_right + n_middle;
+  			return CalculateThreshold(begin, middle_begin, sum_low, n_high, sample_rate);
+  		} else {
+  			return sum_low / (sample_rate - n_high - n_middle - n_right + 1e-30);
+  		}
+  	}
+  }
+
   data_size_t BaggingHelper(Random& cur_rand, data_size_t start, data_size_t cnt, data_size_t* buffer, data_size_t* buffer_right) {
     if (cnt <= 0) { 
       return 0;
@@ -101,25 +132,27 @@ public:
     top_k = std::max(1, top_k);
     score_t threshold = 0;
     if (config_->other_rate > 1e-35) {
-      std::sort(tmp_gradients.begin(), tmp_gradients.end());
-      score_t cum_sum = 0;
-      double sample_rate = (config_->top_rate + config_->other_rate) * cnt;
-      double cur_sample_rate = 0;
-      for (int i = 1; i < cnt; ++i) {
-        cum_sum += tmp_gradients[i - 1];
-        threshold = tmp_gradients[i];
-        cur_sample_rate = cum_sum / threshold + cnt - i;
-        if (sample_rate >= cur_sample_rate) {
-          break;
-        }
-      }
-      if (sample_rate < cur_sample_rate) {
-          threshold *= cur_sample_rate / sample_rate;
-      } 
+    	double sample_rate = (config_->top_rate + config_->other_rate) * cnt;
+    	threshold = CalculateThreshold(tmp_gradients.begin(), tmp_gradients.end(), 0.0, 0, sample_rate);
+      //std::sort(tmp_gradients.begin(), tmp_gradients.end());
+      //score_t cum_sum = 0;
+      //double sample_rate = (config_->top_rate + config_->other_rate) * cnt;
+      //double cur_sample_rate = 0;
+      //for (int i = 1; i < cnt; ++i) {
+      //  cum_sum += tmp_gradients[i - 1];
+      //  threshold = tmp_gradients[i];
+      //  cur_sample_rate = cum_sum / threshold + cnt - i;
+      //  if (sample_rate >= cur_sample_rate) {
+      //    break;
+      //  }
+      //}
+      //if (sample_rate < cur_sample_rate) {
+      //    threshold *= cur_sample_rate / sample_rate;
+      //} 
     } else {
       ArrayArgs<score_t>::ArgMaxAtK(&tmp_gradients, 0, static_cast<int>(tmp_gradients.size()), top_k - 1);
       threshold = tmp_gradients[top_k - 1];
-    } 
+    }
 
     data_size_t cur_left_cnt = 0;
     data_size_t cur_right_cnt = 0;
@@ -202,6 +235,7 @@ public:
     }
     OMP_THROW_EX();
     bag_data_cnt_ = left_cnt;
+    Log::Info("Sample rate %f", float(bag_data_cnt_) / num_data_);
     //std::cout << "Sample rate set to " << float(bag_data_cnt_) / num_data_ << '\n';
     // set bagging data to tree learner
     if (!is_use_subset_) {
