@@ -1,0 +1,8 @@
+/home/ibr/Documents/Practice/LightGBM/python-package/build_cpp/CMakeFiles/install/strip.dir
+/home/ibr/Documents/Practice/LightGBM/python-package/build_cpp/CMakeFiles/install/local.dir
+/home/ibr/Documents/Practice/LightGBM/python-package/build_cpp/CMakeFiles/lightgbm.dir
+/home/ibr/Documents/Practice/LightGBM/python-package/build_cpp/CMakeFiles/_lightgbm.dir
+/home/ibr/Documents/Practice/LightGBM/python-package/build_cpp/CMakeFiles/edit_cache.dir
+/home/ibr/Documents/Practice/LightGBM/python-package/build_cpp/CMakeFiles/rebuild_cache.dir
+/home/ibr/Documents/Practice/LightGBM/python-package/build_cpp/CMakeFiles/list_install_components.dir
+/home/ibr/Documents/Practice/LightGBM/python-package/build_cpp/CMakeFiles/install.dir

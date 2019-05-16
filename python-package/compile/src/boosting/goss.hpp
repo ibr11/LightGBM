@@ -1,5 +1,5 @@
-#ifndef LIGHTGBM_BOOSTING_MVS_H_
-#define LIGHTGBM_BOOSTING_MVS_H_
+#ifndef LIGHTGBM_BOOSTING_GOSS_H_
+#define LIGHTGBM_BOOSTING_GOSS_H_
 
 #include <LightGBM/utils/array_args.h>
 #include <LightGBM/utils/log.h>
@@ -15,8 +15,6 @@
 #include <fstream>
 #include <chrono>
 #include <algorithm>
-#include <functional>
-#include <iostream>
 
 namespace LightGBM {
 
@@ -25,46 +23,46 @@ std::chrono::duration<double, std::milli> subset_time;
 std::chrono::duration<double, std::milli> re_init_tree_time;
 #endif
 
-class MVS: public GBDT {
+class GOSS: public GBDT {
 public:
   /*!
   * \brief Constructor
   */
-  MVS() : GBDT() {
+  GOSS() : GBDT() {
 
   }
 
-  ~MVS() {
+  ~GOSS() {
     #ifdef TIMETAG
-    Log::Info("MVS::subset costs %f", subset_time * 1e-3);
-    Log::Info("MVS::re_init_tree costs %f", re_init_tree_time * 1e-3);
+    Log::Info("GOSS::subset costs %f", subset_time * 1e-3);
+    Log::Info("GOSS::re_init_tree costs %f", re_init_tree_time * 1e-3);
     #endif
   }
 
   void Init(const Config* config, const Dataset* train_data, const ObjectiveFunction* objective_function,
             const std::vector<const Metric*>& training_metrics) override {
     GBDT::Init(config, train_data, objective_function, training_metrics);
-    ResetMVS();
+    ResetGoss();
   }
 
   void ResetTrainingData(const Dataset* train_data, const ObjectiveFunction* objective_function,
                          const std::vector<const Metric*>& training_metrics) override {
     GBDT::ResetTrainingData(train_data, objective_function, training_metrics);
-    ResetMVS();
+    ResetGoss();
   }
 
   void ResetConfig(const Config* config) override {
     GBDT::ResetConfig(config);
-    ResetMVS();
+    ResetGoss();
   }
 
-  void ResetMVS() {
-//    CHECK(config_->top_rate + config_->other_rate <= 1.0f);
- //   CHECK(config_->top_rate + config_->other_rate > 0.0f);
-  //  if (config_->bagging_freq > 0 && config_->bagging_fraction != 1.0f) {
-   //   Log::Fatal("Cannot use bagging in MVS");
-    //}
-    Log::Info("Using MVS");
+  void ResetGoss() {
+    CHECK(config_->top_rate + config_->other_rate <= 1.0f);
+    CHECK(config_->top_rate > 0.0f && config_->other_rate > 0.0f);
+    if (config_->bagging_freq > 0 && config_->bagging_fraction != 1.0f) {
+      Log::Fatal("Cannot use bagging in GOSS");
+    }
+    Log::Info("Using GOSS");
 
     bag_data_indices_.resize(num_data_);
     tmp_indices_.resize(num_data_);
@@ -76,8 +74,8 @@ public:
     right_write_pos_buf_.resize(num_threads_);
 
     is_use_subset_ = false;
-    if (config_->bagging_fraction <= 0.5) {
-      auto bag_data_cnt = static_cast<data_size_t>((config_->bagging_fraction) * num_data_);
+    if (config_->top_rate + config_->other_rate <= 0.5) {
+      auto bag_data_cnt = static_cast<data_size_t>((config_->top_rate + config_->other_rate) * num_data_);
       bag_data_cnt = std::max(1, bag_data_cnt);
       tmp_subset_.reset(new Dataset(bag_data_cnt));
       tmp_subset_->CopyFeatureMapperFrom(train_data_);
@@ -87,69 +85,24 @@ public:
     bag_data_cnt_ = num_data_;
   }
 
-  score_t CalculateThreshold(std::vector<score_t>::iterator begin,
-  	                         std::vector<score_t>::iterator end,
-  	                         score_t sum_low, size_t n_high, double sample_rate) {
-  	score_t threshold = *begin;
-  	auto middle_begin = std::partition(begin, end, [threshold](const score_t& x) {return x < threshold;});
-  	auto middle_end = std::partition(middle_begin, end, [threshold](const score_t& x) {return x <= threshold;});
-  	
-  	score_t sum_left = std::accumulate(begin, middle_begin, 0.0);
-  	size_t n_right = end - middle_end;
-  	size_t n_middle = middle_end - middle_begin;
-  	score_t sum_middle = n_middle * threshold;
-
-  	double estimated_sample_rate = (sum_low + sum_left) / threshold + n_high + n_right + n_middle;
-  	if (estimated_sample_rate > sample_rate) {
-  		if (middle_end != end) {
-  			sum_low += sum_middle + sum_left;
-  			return CalculateThreshold(middle_end, end, sum_low, n_high, sample_rate);
-  		} else {
-  			return (sum_low + sum_left + sum_middle) / (sample_rate - n_high);
-  		}
-  	} else {
-  		if (middle_begin != begin) {
-  			n_high += n_right + n_middle;
-  			return CalculateThreshold(begin, middle_begin, sum_low, n_high, sample_rate);
-  		} else {
-  			return sum_low / (sample_rate - n_high - n_middle - n_right + 1e-30);
-  		}
-  	}
-  }
-
   data_size_t BaggingHelper(Random& cur_rand, data_size_t start, data_size_t cnt, data_size_t* buffer, data_size_t* buffer_right) {
     if (cnt <= 0) { 
       return 0;
     }
     std::vector<score_t> tmp_gradients(cnt, 0.0f);
-    double lambda = config_->var_weight;
     for (data_size_t i = 0; i < cnt; ++i) {
       for (int cur_tree_id = 0; cur_tree_id < num_tree_per_iteration_; ++cur_tree_id) {
         size_t idx = static_cast<size_t>(cur_tree_id) * num_data_ + start + i;
         tmp_gradients[i] += std::fabs(gradients_[idx] * hessians_[idx]);
       }
-      tmp_gradients[i] = std::sqrt(tmp_gradients[i] * tmp_gradients[i] + lambda);
     }
-    score_t threshold = 0;
-    double sample_rate = config_->bagging_fraction * cnt;
-    threshold = CalculateThreshold(tmp_gradients.begin(), tmp_gradients.end(), 0.0, 0, sample_rate);
-      //std::sort(tmp_gradients.begin(), tmp_gradients.end());
-      //score_t cum_sum = 0;
-      //double sample_rate = (config_->top_rate + config_->other_rate) * cnt;
-      //double cur_sample_rate = 0;
-      //for (int i = 1; i < cnt; ++i) {
-      //  cum_sum += tmp_gradients[i - 1];
-      //  threshold = tmp_gradients[i];
-      //  cur_sample_rate = cum_sum / threshold + cnt - i;
-      //  if (sample_rate >= cur_sample_rate) {
-      //    break;
-      //  }
-      //}
-      //if (sample_rate < cur_sample_rate) {
-      //    threshold *= cur_sample_rate / sample_rate;
-      //} 
-    
+    data_size_t top_k = static_cast<data_size_t>(cnt * config_->top_rate);
+    data_size_t other_k = static_cast<data_size_t>(cnt * config_->other_rate);
+    top_k = std::max(1, top_k);
+    ArrayArgs<score_t>::ArgMaxAtK(&tmp_gradients, 0, static_cast<int>(tmp_gradients.size()), top_k - 1);
+    score_t threshold = tmp_gradients[top_k - 1];
 
+    score_t multiply = static_cast<score_t>(cnt - top_k) / other_k;
     data_size_t cur_left_cnt = 0;
     data_size_t cur_right_cnt = 0;
     data_size_t big_weight_cnt = 0;
@@ -159,26 +112,14 @@ public:
         size_t idx = static_cast<size_t>(cur_tree_id) * num_data_ + start + i;
         grad += std::fabs(gradients_[idx] * hessians_[idx]);
       }
-      grad = std::sqrt(grad * grad + lambda);
       if (grad >= threshold) {
-      	double prob = 1;
-      	score_t multiply = 1.0 / prob;
-      	if (cur_rand.NextFloat() < prob) {
-          buffer[cur_left_cnt++] = start + i;
-          ++big_weight_cnt;
-          for (int cur_tree_id = 0; cur_tree_id < num_tree_per_iteration_; ++cur_tree_id) {
-            size_t idx = static_cast<size_t>(cur_tree_id) * num_data_ + start + i;
-            gradients_[idx] *= multiply;
-            hessians_[idx] *= multiply;
-      	  }
-        } else {
-      	  buffer_right[cur_right_cnt++] = start + i;
-      	}
+        buffer[cur_left_cnt++] = start + i;
+        ++big_weight_cnt;
       } else {
-      	//double prior = static_cast<double>(threshold) * 0.01;
-        //double prob = (grad + prior) / (static_cast<double>(threshold) + prior);
-        double prob = grad / static_cast<double>(threshold);
-        score_t multiply = 1.0 / (prob + 1e-35);
+        data_size_t sampled = cur_left_cnt - big_weight_cnt;
+        data_size_t rest_need = other_k - sampled;
+        data_size_t rest_all = (cnt - i) - (top_k - big_weight_cnt);
+        double prob = (rest_need) / static_cast<double>(rest_all);
         if (cur_rand.NextFloat() < prob) {
           buffer[cur_left_cnt++] = start + i;
           for (int cur_tree_id = 0; cur_tree_id < num_tree_per_iteration_; ++cur_tree_id) {
@@ -245,8 +186,6 @@ public:
     }
     OMP_THROW_EX();
     bag_data_cnt_ = left_cnt;
-    Log::Info("Sample rate %f", float(bag_data_cnt_) / num_data_);
-    //std::cout << "Sample rate set to " << float(bag_data_cnt_) / num_data_ << '\n';
     // set bagging data to tree learner
     if (!is_use_subset_) {
       tree_learner_->SetBaggingData(bag_data_indices_.data(), bag_data_cnt_);
@@ -275,4 +214,4 @@ private:
 };
 
 }  // namespace LightGBM
-#endif   // LIGHTGBM_BOOSTING_MVS_H_
+#endif   // LIGHTGBM_BOOSTING_GOSS_H_
